@@ -90,7 +90,9 @@ fn main() {
         start_gps("/dev/serial0", 9_600, [time_a_u64_clone, lat_a_u64_clone, lon_a_u64_clone]);
     });
 
-    set_channel(&interface, 1).unwrap();
+    // might be randomly stopping here. debug this
+    // match statement 
+    dbg!(set_channel(&interface, 1).unwrap());
 
     let mut tagged_params_filter: Vec<u8> = Vec::new();
     tagged_params_filter.push(tagged_params_ws::SSID);
@@ -112,16 +114,14 @@ fn main() {
 
 
     loop {
-        thread::sleep(Duration::from_millis(50));
+        //thread::sleep(Duration::from_millis(50));
 
         let (broadcast, gps_data) = rx.recv().unwrap();
 
         if let Some(ssid) = broadcast.found_tags.get(&0x00) {
-            if !ssid.is_empty() {
-                println!("{}", capture::mac_address_to_string(&broadcast.transmitter_mac_address));
-                println!("{}", value_to_type!(broadcast.packet_type));
-                dbg!(gps_data);
-                println!("{}\n\n", &String::from_utf8_lossy(&ssid))
+            if !ssid.is_empty() && ssid.len() > 0  && &String::from_utf8_lossy(&ssid).len() < &4 {
+                dbg!(ssid);
+                println!("{} packet recvd from ({}) {} at {:.6}, {:.6}", value_to_type!(broadcast.packet_type), &String::from_utf8_lossy(&ssid), capture::mac_address_to_string(&broadcast.transmitter_mac_address), gps_data.lat, gps_data.lon)
             }
         }
     }

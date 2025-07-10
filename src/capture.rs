@@ -76,7 +76,7 @@ pub fn start(interface_name: &str, tag_numbers: &Vec<u8>, mpsc_sender: mpsc::Sen
         let global_gps_data_handle = Arc::clone(&global_gps_data);
 
         thread::spawn(move || { 
-            loop {     
+            loop {
                 let current_global_gps_data = global_gps_data_handle.read().unwrap();
 
                 // Get GPS data
@@ -85,15 +85,18 @@ pub fn start(interface_name: &str, tag_numbers: &Vec<u8>, mpsc_sender: mpsc::Sen
                 // If the GPS data is not different then do not change the global gps data
                 // If the GPS data is 0 for both lat and lon then dont change the global gps data
                 if (current_global_gps_data.lat == current_gps_data.lat && current_global_gps_data.lon == current_gps_data.lon) || (current_gps_data.lat == 0.0 || current_gps_data.lon == 0.0) {
-                    // Drop early (Not sure if this is necessary but had it when I was using Mutex)
+                    // Drop early
                     drop(current_global_gps_data);
 
                     thread::sleep(Duration::from_millis(400));
 
                     continue;
                 }
+            
+                // Drop the last read to prevent a deadlock
+                drop(current_global_gps_data);
 
-                println!("Updated GPS");
+                //println!("Updated GPS");
                 let mut current_global_gps_data = global_gps_data_handle.write().unwrap();
                 *current_global_gps_data = current_gps_data;
             }       
