@@ -12,35 +12,12 @@ use airmon_ng::{start_monitor_mode, stop_monitor_mode, set_channel};
 use std::{
     thread,
     time::Duration,
-    sync::{Arc, atomic::{AtomicU64, Ordering::Acquire}}
+    sync::{Arc, mpsc, atomic::{AtomicU64}}
 };
 // do channels 1, 6 and 11
 // Sometimes fails to start?
-// Figure out how to make passing gps data not so round about
+// create better error handling so that the system doesnt halt for one malformated packet
 
-fn getLocation(atomic_coords: [Arc<AtomicU64>; 3]) -> [f64; 3] {
-    let time = f64::from_bits(atomic_coords[0].load(Acquire));
-    let lat = f64::from_bits(atomic_coords[1].load(Acquire));
-    let lon = f64::from_bits(atomic_coords[2].load(Acquire));
-
-    return [time, lat, lon];
-}
-
-fn packet_found_callback(broadcast: capture::Broadcast, gps_data: Option<[Arc<AtomicU64>; 3]>) {
-    if let Some(ssid) = broadcast.found_tags.get(&0x00) {
-        if !ssid.is_empty() {
-
-            if let Some(gps_data) = gps_data {
-                dbg!(getLocation(gps_data));
-            }
-            
-            println!("{}", capture::mac_address_to_string(&broadcast.transmitter_mac_address));
-            println!("{}", value_to_type!(broadcast.packet_type));
-
-            println!("{}\n\n", &String::from_utf8_lossy(&ssid))
-        }
-    }
-}
 
 fn main() {
     let time_a_u64 = Arc::new(AtomicU64::new(0));
@@ -118,7 +95,34 @@ fn main() {
     let mut tagged_params_filter: Vec<u8> = Vec::new();
     tagged_params_filter.push(tagged_params_ws::SSID);
 
-    let (tx, rx) = mpsc::channel();
+    let (tx, rx): (mpsc::Sender<(capture::Broadcast, capture::GpsDataDecoded)>, mpsc::Receiver<(capture::Broadcast, capture::GpsDataDecoded)>) = mpsc::channel();
     let sender = tx.clone();
-    capture::start(&interface, &tagged_params_filter, packet_found_callback).unwrap();
+
+    // Clone Arc AtomicU64s
+    let time_a_u64_clone = Arc::clone(&time_a_u64);
+    let lat_a_u64_clone = Arc::clone(&lat_a_u64);
+    let lon_a_u64_clone = Arc::clone(&lon_a_u64);
+
+    thread::spawn(move || {
+        match capture::start(&interface, &tagged_params_filter, sender, Some([time_a_u64_clone, lat_a_u64_clone, lon_a_u64_clone])) {
+            Ok(_) => println!("Successfully started capture thread."),
+            Err(e) => eprintln!("Unable to start capture thread: {}", e)
+        };
+    });
+
+
+    loop {
+        thread::sleep(Duration::from_millis(50));
+
+        let (broadcast, gps_data) = rx.recv().unwrap();
+
+        if let Some(ssid) = broadcast.found_tags.get(&0x00) {
+            if !ssid.is_empty() {
+                println!("{}", capture::mac_address_to_string(&broadcast.transmitter_mac_address));
+                println!("{}", value_to_type!(broadcast.packet_type));
+                dbg!(gps_data);
+                println!("{}\n\n", &String::from_utf8_lossy(&ssid))
+            }
+        }
+    }
 }

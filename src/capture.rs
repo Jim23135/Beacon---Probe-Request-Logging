@@ -1,8 +1,6 @@
 use pcap::{Device, Capture, Error as pcap_error};
 use std::{
-    io::Error as io_error,
-    collections::HashMap,
-    sync::{Arc, atomic::{AtomicU64}}
+    collections::HashMap, io::Error as io_error, sync::{atomic::{AtomicU64, Ordering::Acquire}, mpsc, Arc, RwLock}, thread, time::Duration
 };
 use crate::types::packet_types;
 
@@ -10,6 +8,21 @@ pub struct Broadcast {
     pub packet_type: u8, // First byte in ieee 802.11 header
     pub transmitter_mac_address: [u8; 6],
     pub found_tags: HashMap<u8, Vec<u8>>
+}
+
+#[derive(Clone, Debug)]
+pub struct GpsDataDecoded {
+    pub time: f64,
+    pub lat: f64,
+    pub lon: f64
+}
+
+fn get_location(atomic_coords: &[Arc<AtomicU64>; 3]) -> GpsDataDecoded {
+    let time = f64::from_bits(atomic_coords[0].load(Acquire));
+    let lat = f64::from_bits(atomic_coords[1].load(Acquire));
+    let lon = f64::from_bits(atomic_coords[2].load(Acquire));
+
+    return GpsDataDecoded {time: time, lat: lat, lon: lon};
 }
 
 fn search_tagged_params(data: &[u8], target_tag_numbers: &Vec<u8>) -> HashMap<u8, Vec<u8>> {
@@ -55,8 +68,37 @@ pub fn get_changed_interfaces(original_devices: Vec<Device>, changed_devices: Ve
     return new_or_changed_devices;
 }
 
-pub fn start<F>(interface_name: &str, tag_numbers: &Vec<u8>, callback: F, gps_data: Option<[Arc<AtomicU64>; 3]>) -> Result<(), std::io::Error> where F: Fn(Broadcast, Option<[Arc<AtomicU64>; 3]>), {
-    // Lots of error mapping here. Theres probably a better way to do the error handling...
+pub fn start(interface_name: &str, tag_numbers: &Vec<u8>, mpsc_sender: mpsc::Sender<(Broadcast, GpsDataDecoded)>, gps_data_arc: Option<[Arc<AtomicU64>; 3]>) -> Result<(), std::io::Error> {
+    let global_gps_data = Arc::new(RwLock::new(GpsDataDecoded {time: 0.0, lat: 0.0, lon: 0.0}));
+
+    // If the caller has passed gps_data then assume to use gps
+    if let Some(gps_data) = gps_data_arc {
+        let global_gps_data_handle = Arc::clone(&global_gps_data);
+
+        thread::spawn(move || { 
+            loop {     
+                let current_global_gps_data = global_gps_data_handle.read().unwrap();
+
+                // Get GPS data
+                let current_gps_data = get_location(&gps_data);
+
+                // If the GPS data is not different then do not change the global gps data
+                // If the GPS data is 0 for both lat and lon then dont change the global gps data
+                if (current_global_gps_data.lat == current_gps_data.lat && current_global_gps_data.lon == current_gps_data.lon) || (current_gps_data.lat == 0.0 || current_gps_data.lon == 0.0) {
+                    // Drop early (Not sure if this is necessary but had it when I was using Mutex)
+                    drop(current_global_gps_data);
+
+                    thread::sleep(Duration::from_millis(400));
+
+                    continue;
+                }
+
+                println!("Updated GPS");
+                let mut current_global_gps_data = global_gps_data_handle.write().unwrap();
+                *current_global_gps_data = current_gps_data;
+            }       
+        });
+    }
 
     // immediate_mode(false) - Packets do not come through when
     // promisc() - Promiscuous mode (true - captures all packets even if they werent addressed to us)
@@ -74,12 +116,8 @@ pub fn start<F>(interface_name: &str, tag_numbers: &Vec<u8>, callback: F, gps_da
         
 
         // https://howiwifi.com/2020/07/13/802-11-frame-types-and-formats/
-        
-        //
         let mut ieee_802_11_frame_start: usize = 0;
         let first_byte = packet[0];
-
-        
 
         // First byte of packet - meaning
         // 0x00 - A radiotap header will be present
@@ -116,9 +154,9 @@ pub fn start<F>(interface_name: &str, tag_numbers: &Vec<u8>, callback: F, gps_da
                 found_tags: found_tags
             };
 
-            //callback(broadcast, gps_data);
+            let gps_data = global_gps_data.read().unwrap();
+            mpsc_sender.send((broadcast, (*gps_data).clone())).unwrap();
         }
-        
     }
 
     return Ok(());
