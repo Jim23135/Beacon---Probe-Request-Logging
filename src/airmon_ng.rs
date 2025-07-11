@@ -33,7 +33,7 @@ pub fn stop_monitor_mode(interface_name: &str) -> Result<(), String> {
 pub fn set_channel(interface: &str, channel: u8) -> Result<(), String> {
     match Command::new("iwconfig").arg(interface).arg("channel").arg(channel.to_string()).stdout(Stdio::null()).stderr(Stdio::null()).status() {
         Ok(status) if status.success() => {
-            return Ok((status.to_string()));
+            return Ok(());
         }
         Ok(status) => {
             return Err(status.to_string());

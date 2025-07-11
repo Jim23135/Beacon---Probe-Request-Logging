@@ -116,7 +116,6 @@ pub fn start(interface_name: &str, tag_numbers: &Vec<u8>, mpsc_sender: mpsc::Sen
 
     while let Ok(packet) = capture.next_packet() {
         let packet = packet.data;
-        
 
         // https://howiwifi.com/2020/07/13/802-11-frame-types-and-formats/
         let mut ieee_802_11_frame_start: usize = 0;
@@ -158,6 +157,7 @@ pub fn start(interface_name: &str, tag_numbers: &Vec<u8>, mpsc_sender: mpsc::Sen
             };
 
             let gps_data = global_gps_data.read().unwrap();
+            
             mpsc_sender.send((broadcast, (*gps_data).clone())).unwrap();
         }
     }
