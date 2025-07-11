@@ -154,7 +154,7 @@ fn main() {
 
                     writeln!(
                         output_logged_packets_file_writer,
-                        "{} packet recvd from {} ({}) at {:.6}, {:.6}, {}",
+                        "{} packet recvd for {} from {} at {:.6}, {:.6}, {}",
                         value_to_type!(broadcast.packet_type),
                         &String::from_utf8_lossy(&ssid),
                         capture::mac_address_to_string(&broadcast.transmitter_mac_address),
