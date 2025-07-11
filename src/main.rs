@@ -112,9 +112,8 @@ fn main() {
         };
     });
 
-
+    
     loop {
-        //thread::sleep(Duration::from_millis(50));
 
         let (broadcast, gps_data) = rx.recv().unwrap();
 
