@@ -24,6 +24,7 @@ use std::{
 // do channels 1, 6 and 11
 // There seems to be an issue where sometimes stuff is not being printed to console. cant actually figure out why this is. Assuming it wont be a problem when i start writing to file...
 // create better error handling so that the system doesnt halt for one malformated packet
+// more carefully analyze what is being passed into functions i.e. referendes or copies or moving ownership
 
 #[derive(Serialize, Deserialize)]
 struct Config {
