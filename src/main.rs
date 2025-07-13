@@ -8,8 +8,13 @@ use gps::start_gps;
 use tagged_params::tagged_params_ws;
 use airmon_ng::{start_monitor_mode, stop_monitor_mode, set_channel};
 
+use serde::{Serialize, Deserialize};
+
 use std::{
+    fs,
+    env,
     thread,
+    process,
     time::Duration,
     fs::OpenOptions,
     io::{Write, BufWriter},
@@ -19,9 +24,46 @@ use std::{
 // do channels 1, 6 and 11
 // There seems to be an issue where sometimes stuff is not being printed to console. cant actually figure out why this is. Assuming it wont be a problem when i start writing to file...
 // create better error handling so that the system doesnt halt for one malformated packet
-// Add actual error handling for functions and threads in main
+
+#[derive(Serialize, Deserialize)]
+struct Config {
+    interface: String,
+    channel: u8,
+    gps_serial_location: String
+}
 
 fn main() {
+    // Relative path
+    let exe_path = env::current_exe().expect("Failed to get exe path.");
+    let rel_path = exe_path.parent().expect("Failed to find exe parent directory.").to_path_buf();
+
+    // Get config from config.json
+    let config: Config = match fs::read_to_string(rel_path.join("config.json")) {
+        Ok(json_data) => {
+            match serde_json::from_str(&json_data) {
+                Ok(config) => config,
+                Err(e) => {
+                    eprintln!("Json was invalid: {}\n\nCreating an example json file.", e);
+
+                    let example_config = serde_json::to_string_pretty(&Config {interface: "wlan1".to_string(), channel: 1, gps_serial_location: "/dev/serial0".to_string()}).unwrap();
+                    let mut file = fs::File::create(rel_path.join("example_config.json")).unwrap();
+                    file.write_all(example_config.as_bytes()).unwrap();
+
+                    process::exit(0);
+                }
+            }
+        },
+        Err(e) => {
+            eprintln!("'config.json' not found in program root directory.{}\n\nCreating an example config.json...", e);
+
+            let example_config = serde_json::to_string_pretty(&Config {interface: "wlan1".to_string(), channel: 1, gps_serial_location: "/dev/serial0".to_string()}).unwrap();
+            let mut file = fs::File::create(rel_path.join("config.json")).unwrap();
+            file.write_all(example_config.as_bytes()).unwrap();
+
+            process::exit(0);
+        }
+    };
+
     let time_a_u64 = Arc::new(AtomicU64::new(0));
     let lat_a_u64 = Arc::new(AtomicU64::new(0));
     let lon_a_u64 = Arc::new(AtomicU64::new(0));
@@ -34,14 +76,14 @@ fn main() {
             println!("Attempted to start {} times.", attempts_to_start);
 
             if attempts_to_start >= 5 {
-                println!("Exiting.");
+                eprintln!("Exiting. Too many attempts to start.");
 
-                return;
+                process::exit(0);
             }
 
-            thread::sleep(Duration::from_secs(5));
+            thread::sleep(Duration::from_secs(3));
 
-            match stop_monitor_mode("wlan1") {
+            match stop_monitor_mode(&config.interface) {
                 Ok(_) => {},
                 Err(e) => { println!("{}", e); continue; }
             };
@@ -56,7 +98,7 @@ fn main() {
             Err(e) => { println!("Error {}", e); continue; }
         };
 
-        match start_monitor_mode("wlan1") {
+        match start_monitor_mode(&config.interface) {
             Ok(_) => {},
             Err(e) => { println!("Error {}", e); continue; }
         };
@@ -75,6 +117,7 @@ fn main() {
         }
 
         interface = changed_interfaces[0].name.clone();
+
         break;
     }
 
@@ -87,14 +130,28 @@ fn main() {
 
     // Start gps receving
     thread::spawn(move || {
-        match start_gps("/dev/serial0", 9_600, [time_a_u64_clone, lat_a_u64_clone, lon_a_u64_clone]) {
-            Ok(_) => {},
-            Err(e) => eprintln!("Error starting GPS: {}", e)
-        };
+        let mut attempts_to_start = 0;
+
+        loop {
+            match start_gps(&config.gps_serial_location, 9_600, [&time_a_u64_clone, &lat_a_u64_clone, &lon_a_u64_clone]) {
+                Ok(_) => {println!("Successfully started GPS"); break;},
+                Err(e) => eprintln!("Error starting GPS: {}", e)
+            };
+
+            attempts_to_start += 1;
+
+            thread::sleep(Duration::from_secs(3));
+
+            if attempts_to_start >= 3 {
+                eprintln!("GPS was not started!");
+
+                break;
+            }
+        }
     });
 
     // Set channel
-    match set_channel(&interface, 1) {
+    match set_channel(&interface, config.channel) {
         Ok(_) => println!("Successfully switched channel to channel 1"),
         Err(e) => eprintln!("Unable to set channel: {}", e)
     }
@@ -113,7 +170,7 @@ fn main() {
     thread::spawn(move || {
         match capture::start(&interface, &tagged_params_filter, capture_thread_tx_clone, Some([time_a_u64_clone, lat_a_u64_clone, lon_a_u64_clone])) {
             Ok(_) => println!("Successfully started capture thread"),
-            Err(e) => eprintln!("Unable to start capture thread: {}", e)
+            Err(e) => panic!("Error starting capture thread: {}", e)
         };
     });
 
@@ -127,7 +184,7 @@ fn main() {
 
     thread::spawn(move || {
         // Probably want to switch to sqlite3 at some point
-        let output_logged_packets_file = OpenOptions::new().write(true).append(true).create(true).open("logged_packets.txt").unwrap();
+        let output_logged_packets_file = OpenOptions::new().write(true).append(true).create(true).open(rel_path.join("logged_packets.txt")).unwrap();
 
         loop {
             /*
@@ -150,11 +207,14 @@ fn main() {
                 for packet in to_dump_packets {
                     let (broadcast, gps_data) = packet;
 
-                    let ssid = broadcast.found_tags.get(&0x00).unwrap();
+                    // Unchecked because the logged packet should not make it to this thread if it didn't have 0x00 (ssid)
+                    let ssid = unsafe { broadcast.found_tags.get(&0x00).unwrap_unchecked() };
+
+                    // "{} packet recvd for {} from {} at {:.6}, {:.6}, {}",
 
                     writeln!(
                         output_logged_packets_file_writer,
-                        "{} packet recvd for {} from {} at {:.6}, {:.6}, {}",
+                        "{}\t{}\t{}\t{:.6}\t{:.6}\t{}",
                         value_to_type!(broadcast.packet_type),
                         &String::from_utf8_lossy(&ssid),
                         capture::mac_address_to_string(&broadcast.transmitter_mac_address),

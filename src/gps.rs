@@ -2,7 +2,7 @@ use serialport;
 use std::{
     time::Duration,
     collections::HashMap,
-    io::{BufReader, BufRead},
+    io::{Error as io_error, BufReader, BufRead},
     sync::{Arc, atomic::{AtomicU64, Ordering::Release}}
 };
 
@@ -41,12 +41,8 @@ fn parse_nema(nema_string: &str) -> HashMap<&str, f64> {
     return nema_parsed
 }
 
-pub fn start_gps(serial_device: &str, baud_rate: u32, atomic_coords: [Arc<AtomicU64>; 3]) {
-    let serial = match serialport::new(serial_device, baud_rate).timeout(Duration::from_millis(10)).open() {
-        Ok(serial) => serial,
-        Err(e) => panic!("{}", e)
-    };
-    //let a = Arc::new(AtomicU64::new(v));
+pub fn start_gps(serial_device: &str, baud_rate: u32, atomic_coords: [&Arc<AtomicU64>; 3]) -> Result<(), std::io::Error> {
+    let serial = serialport::new(serial_device, baud_rate).timeout(Duration::from_millis(10)).open()?;
 
     let serial_reader = BufReader::new(serial);
 
@@ -69,4 +65,6 @@ pub fn start_gps(serial_device: &str, baud_rate: u32, atomic_coords: [Arc<Atomic
             Err(e) => {println!("Error getting serial: {}", e)}
         }
     }
+
+    Err(io_error::new(std::io::ErrorKind::Other, "Ended early."))
 }
